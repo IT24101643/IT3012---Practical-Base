@@ -1,19 +1,12 @@
 # visual_grid_game.py
 import random
+from agent import SearchAgent
 try:
     import tkinter as tk
 except ImportError:
-    tk = None  # GUI unavailable (e.g. headless environment) -- VisualGridHuntGame still works
-
-
+    tk = None  
 class VisualGridHuntGame:
-    """A flexible Pacman-style grid environment.
-
-    Lab 01: partial observability (wall_ahead / food_here / bumped) +
-            SimpleReflexAgent / ModelBasedAgent test bed.
-    Lab 02: adds toxic traps -- a hidden hazard the agent can sense
-            locally but never sees the location of in advance.
-    """
+ 
 
     DIR_VECTORS = {'Up': (0, 1), 'Down': (0, -1), 'Left': (-1, 0), 'Right': (1, 0)}
 
@@ -29,7 +22,7 @@ class VisualGridHuntGame:
         else:
             self.walls = {(2, 2), (2, 3), (5, 5), (6, 5), (3, 7)}
 
-        # --- Step 2.1: toxic traps -----------------------------------
+        # Step 2.1: toxic traps 
         # Populated randomly, safely avoiding (0, 0) and existing walls.
         self.toxic_traps = set()
         while len(self.toxic_traps) < num_traps:
@@ -38,7 +31,7 @@ class VisualGridHuntGame:
             pos = (tx, ty)
             if pos != (0, 0) and pos not in self.walls:
                 self.toxic_traps.add(pos)
-        # ---------------------------------------------------------------
+       
 
         self.food_positions = set()
         while len(self.food_positions) < num_food:
@@ -54,11 +47,7 @@ class VisualGridHuntGame:
         self.steps = 0
 
     def get_percept(self) -> dict:
-        """Partial observability: the agent only senses the cell ahead
-        (wall_ahead), the cell it's standing on (food_here /
-        smells_toxin), and whether its last move actually happened
-        (bumped). It has no idea where it is on the map.
-        """
+       
         dx, dy = self.DIR_VECTORS[self.facing]
         ahead = (self.agent_pos[0] + dx, self.agent_pos[1] + dy)
         in_bounds = 0 <= ahead[0] < self.width and 0 <= ahead[1] < self.height
@@ -69,10 +58,15 @@ class VisualGridHuntGame:
         return {
             'wall_ahead': wall_ahead,
             'food_here': here in self.food_positions,
-            'smells_toxin': here in self.toxic_traps,   # --- Step 2.2 ---
+            'smells_toxin': here in self.toxic_traps,   
             'bumped': self.last_move_blocked,
             'score': self.score,
             'remaining_food': len(self.food_positions),
+            # Practical 03: expose the world model to the planning agent
+            'agent_pos': tuple(self.agent_pos),
+            'grid_size': (self.width, self.height),
+            'walls': list(self.walls),
+            'all_food': list(self.food_positions),
         }
 
     def execute_action(self, action: str):
@@ -99,7 +93,7 @@ class VisualGridHuntGame:
 
         tuple_pos = tuple(self.agent_pos)
 
-        # --- Step 2.3: toxic trap collision penalty ---
+        #  Step 2.3: toxic trap collision penalty 
         if tuple_pos in self.toxic_traps:
             self.score -= 15
 
@@ -114,10 +108,12 @@ class VisualGridHuntGame:
 class GridGameGUI:
     def __init__(self, root, width=10, height=10, num_food=12, num_traps=3, walls=None):
         self.root = root
-        self.root.title("IT3012 - Grid Hunt with Toxic Traps")
+        self.root.title(" Grid Hunt with Toxic Traps")
 
         self.env = VisualGridHuntGame(width=width, height=height, num_food=num_food,
                                        num_traps=num_traps, custom_walls=walls)
+        # Practical 03: choose 'BFS', 'DFS', or 'UCS' here.
+        self.agent = SearchAgent(active_algo='BFS')
 
         max_canvas_dim = 600
         self.cell_size = max(20, min(max_canvas_dim // self.env.width, max_canvas_dim // self.env.height))
@@ -152,7 +148,7 @@ class GridGameGUI:
                 if self.cell_size >= 40 and (x, y) in self.env.walls:
                     self.canvas.create_text(x1 + self.cell_size / 2, y1 + self.cell_size / 2, text="W", fill="white", font=("Arial", 8, "bold"))
 
-        # --- Step 2.3: draw toxic traps as purple shapes ---
+        # Step 2.3: draw toxic traps as purple shapes 
         for tx, ty in self.env.toxic_traps:
             offset = self.cell_size * 0.2
             x1 = tx * self.cell_size + offset
@@ -176,7 +172,14 @@ class GridGameGUI:
 
         def step():
             if not self.env.is_done():
-                action = random.choice(['Up', 'Down', 'Left', 'Right'])
+                percept = self.env.get_percept()
+                action = self.agent.sense_and_act(percept)
+
+                if action == 'Stop':
+                    self.label.config(text=f"No reachable food found. Score: {self.env.score}")
+                    self.btn.config(state="normal")
+                    return
+
                 self.env.execute_action(action)
 
                 self.draw_grid()
@@ -191,5 +194,6 @@ class GridGameGUI:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = GridGameGUI(root, width=12, height=12, num_food=15, num_traps=4)
+    
+    app = GridGameGUI(root, width=12, height=12, num_food=15, num_traps=0)
     root.mainloop()
