@@ -1,26 +1,42 @@
 # visual_grid_game.py
 import random
-from agent import SearchAgent
+import sys
+from agent import SearchAgent, SimpleReflexAgent, ModelBasedAgent
 try:
     import tkinter as tk
 except ImportError:
-    tk = None  
+    tk = None
+
+
 class VisualGridHuntGame:
- 
+    """Grid Hunt environment used by Practicals 01-04."""
 
     DIR_VECTORS = {'Up': (0, 1), 'Down': (0, -1), 'Left': (-1, 0), 'Right': (1, 0)}
 
-    def __init__(self, width=10, height=10, num_food=10, num_traps=3, custom_walls=None):
+    def __init__(self, width=10, height=10, num_food=10, num_traps=3, custom_walls=None,
+                 expose_world_model=True):
         self.width = width
         self.height = height
         self.agent_pos = [0, 0]
         self.facing = 'Up'              # which way the agent last tried to move
         self.last_move_blocked = False  # simple bump sensor
 
+        # Practical 01 (Task 1.1, Q3): no opponent agents -> Single-Agent environment.
+        self.opponents = []
+
+        # Practical 02 vs 03/04: False = strictly local (partially observable) percepts;
+        # True = also expose the world model (agent_pos, grid_size, walls, all_food)
+        # that the planning agents of Practicals 03/04 need.
+        self.expose_world_model = expose_world_model
+
         if custom_walls is not None:
             self.walls = set(custom_walls)
         else:
             self.walls = {(2, 2), (2, 3), (5, 5), (6, 5), (3, 7)}
+
+        # Never ask for more traps/food than there are free cells (avoids an endless loop).
+        free_cells = self.width * self.height - 1 - len(self.walls - {(0, 0)})
+        num_traps = min(num_traps, max(0, free_cells))
 
         # Step 2.1: toxic traps 
         # Populated randomly, safely avoiding (0, 0) and existing walls.
@@ -33,6 +49,7 @@ class VisualGridHuntGame:
                 self.toxic_traps.add(pos)
        
 
+        num_food = min(num_food, max(0, free_cells - len(self.toxic_traps)))
         self.food_positions = set()
         while len(self.food_positions) < num_food:
             fx = random.randint(0, self.width - 1)
@@ -47,7 +64,6 @@ class VisualGridHuntGame:
         self.steps = 0
 
     def get_percept(self) -> dict:
-       
         dx, dy = self.DIR_VECTORS[self.facing]
         ahead = (self.agent_pos[0] + dx, self.agent_pos[1] + dy)
         in_bounds = 0 <= ahead[0] < self.width and 0 <= ahead[1] < self.height
@@ -55,19 +71,27 @@ class VisualGridHuntGame:
 
         here = tuple(self.agent_pos)
 
-        return {
+        percept = {
+            # Practical 02: local booleans only (what the agent's sensors can see)
             'wall_ahead': wall_ahead,
             'food_here': here in self.food_positions,
-            'smells_toxin': here in self.toxic_traps,   
+            'food_ahead': ahead in self.food_positions,
             'bumped': self.last_move_blocked,
+            # Practical 01 Step 2.2: toxin sensor
+            'smells_toxin': tuple(self.agent_pos) in self.toxic_traps,
             'score': self.score,
             'remaining_food': len(self.food_positions),
-            # Practical 03: expose the world model to the planning agent
-            'agent_pos': tuple(self.agent_pos),
-            'grid_size': (self.width, self.height),
-            'walls': list(self.walls),
-            'all_food': list(self.food_positions),
         }
+
+        if self.expose_world_model:
+            # Practical 03: expose the world model to the planning agent
+            percept.update({
+                'agent_pos': tuple(self.agent_pos),
+                'grid_size': (self.width, self.height),
+                'walls': list(self.walls),
+                'all_food': list(self.food_positions),
+            })
+        return percept
 
     def execute_action(self, action: str):
         self.steps += 1
@@ -75,6 +99,16 @@ class VisualGridHuntGame:
         if action in self.DIR_VECTORS:
             self.facing = action
             self._attempt_move(action)
+
+            tuple_pos = tuple(self.agent_pos)
+
+            # Practical 01 Step 2.3: toxic trap collision penalty on the updated position
+            if tuple_pos in self.toxic_traps:
+                self.score -= 15
+
+            if tuple_pos in self.food_positions:
+                self.food_positions.remove(tuple_pos)
+                self.score += 20
         # any other/unrecognised action string: agent wastes a turn
 
     def _attempt_move(self, direction):
@@ -91,29 +125,37 @@ class VisualGridHuntGame:
             self.agent_pos = new_pos
             self.last_move_blocked = (new_pos == old_pos)  # clipped at the grid edge
 
-        tuple_pos = tuple(self.agent_pos)
-
-        #  Step 2.3: toxic trap collision penalty 
-        if tuple_pos in self.toxic_traps:
-            self.score -= 15
-
-        if tuple_pos in self.food_positions:
-            self.food_positions.remove(tuple_pos)
-            self.score += 20
-
     def is_done(self) -> bool:
         return len(self.food_positions) == 0 or self.steps >= 60
 
 
+def build_agent(name):
+    """Create an agent from a short name (used by the command line)."""
+    key = name.strip().lower()
+    if key in ('reflex', 'simplereflex'):
+        return SimpleReflexAgent()
+    if key in ('model', 'modelbased'):
+        return ModelBasedAgent()
+    if key in ('bfs', 'dfs', 'ucs', 'astar', 'a*'):
+        return SearchAgent(active_algo=key)
+    raise ValueError("Agent must be one of: reflex, model, bfs, dfs, ucs, astar")
+
+
 class GridGameGUI:
-    def __init__(self, root, width=10, height=10, num_food=12, num_traps=3, walls=None):
+    def __init__(self, root, width=10, height=10, num_food=12, num_traps=3, walls=None,
+                 agent=None):
         self.root = root
         self.root.title(" Grid Hunt with Toxic Traps")
 
+        # Practical 03/04: choose 'BFS', 'DFS', 'UCS', or 'AStar' here.
+        # Practical 04: inject the informed-search agent (A* + Manhattan heuristic).
+        self.agent = agent if agent is not None else SearchAgent(active_algo='AStar')
+
+        # Planning agents (Practical 03/04) need the world model in the percept;
+        # the reflex / model-based agents (Practical 02) only get local percepts.
         self.env = VisualGridHuntGame(width=width, height=height, num_food=num_food,
-                                       num_traps=num_traps, custom_walls=walls)
-        # Practical 03: choose 'BFS', 'DFS', or 'UCS' here.
-        self.agent = SearchAgent(active_algo='BFS')
+                                      num_traps=num_traps, custom_walls=walls,
+                                      expose_world_model=isinstance(self.agent, SearchAgent))
 
         max_canvas_dim = 600
         self.cell_size = max(20, min(max_canvas_dim // self.env.width, max_canvas_dim // self.env.height))
@@ -193,7 +235,15 @@ class GridGameGUI:
 
 
 if __name__ == "__main__":
+    # Usage: python visual_grid_game.py [reflex | model | bfs | dfs | ucs | astar]
+    # Default (Practical 04): A* search agent.
+    if tk is None:
+        raise SystemExit("tkinter is not available in this Python installation.")
+
+    algo_name = sys.argv[1] if len(sys.argv) > 1 else 'astar'
+
     root = tk.Tk()
-    
-    app = GridGameGUI(root, width=12, height=12, num_food=15, num_traps=0)
+    # num_traps=3 -> three purple toxic traps are drawn (Practical 01, Step 2.3).
+    app = GridGameGUI(root, width=12, height=12, num_food=15, num_traps=3,
+                      agent=build_agent(algo_name))
     root.mainloop()
